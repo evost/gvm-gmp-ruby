@@ -244,7 +244,11 @@ module GVMGMP
 			xml = REXML::Element.new(name)
 			child.keys.each do |k|
 				xml.add_element(k)
-				xml.elements[k].text = child[k]
+				if k == "port_list"
+					xml.elements[k].attributes["id"] = child[k]
+				else
+					xml.elements[k].text = child[k]
+				end
 			end
 			return xml
 		end
