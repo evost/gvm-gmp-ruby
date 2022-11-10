@@ -12,21 +12,21 @@ require 'rake'
 require 'jeweler'
 Jeweler::Tasks.new do |gem|
   # gem is a Gem::Specification... see http://docs.rubygems.org/read/chapter/20 for more options
-  gem.name = "openvas-omp"
-  gem.homepage = "http://github.com/kost/openvas-omp"
+  gem.name = "gvm-gmp"
+  gem.homepage = "https://github.com/evost/gvm-gmp-ruby"
   gem.license = "MIT"
-  gem.summary = %Q{Communicate with OpenVAS manager through OMP}
-  gem.description = %Q{Communicate with OpenVAS manager through OMP. 
-This library is used for communication with OpenVAS manager over OMP.
+  gem.summary = %Q{Communicate with GVM through GMP}
+  gem.description = %Q{Communicate with GVM through GMP. 
+This library is used for communication with GVM over GMP.
 You can start, stop, pause and resume scan. Watch progress and status of
 scan, download report, etc.}
-  gem.email = "vlatko.kosturjak@gmail.com"
-  gem.authors = ["Vlatko Kosturjak"]
+  gem.email = "konstantin.kraynov@yandex.ru"
+  gem.authors = ["Konstantin Kraynov"]
   # Include your dependencies below. Runtime dependencies are required when using your gem,
   # and development dependencies are only needed for development (ie running rake tasks, tests, etc)
   #  gem.add_runtime_dependency 'jabber4r', '> 0.1'
   #  gem.add_development_dependency 'rspec', '> 1.2.3'
-  gem.rubyforge_project = "openvas-omp"
+  gem.rubyforge_project = "gvm-gmp"
 end
 Jeweler::RubygemsDotOrgTasks.new
 
@@ -51,7 +51,7 @@ Rake::RDocTask.new do |rdoc|
   version = File.exist?('VERSION') ? File.read('VERSION') : ""
 
   rdoc.rdoc_dir = 'rdoc'
-  rdoc.title = "openvas-omp #{version}"
+  rdoc.title = "gvm-gmp #{version}"
   rdoc.rdoc_files.include('README*')
   rdoc.rdoc_files.include('lib/**/*.rb')
 end

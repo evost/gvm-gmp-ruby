@@ -1,14 +1,16 @@
 #
-# = openvas-omp.rb: communicate with OpenVAS manager over OMP
+# = gvm-gmp.rb: communicate with GVM over GMP
 #
-# Author:: Vlatko Kosturjak
+# Author:: Vlatko Kosturjak, Konstantin Kraynov
 #
-# (C) Vlatko Kosturjak, Kost. Distributed under MIT license:
+# (C) Vlatko Kosturjak, Kost.
+# (C) Konstantin Kraynov, Evost.
+# Distributed under MIT license:
 # http://www.opensource.org/licenses/mit-license.php
 # 
 # == What is this library? 
 # 
-# This library is used for communication with OpenVAS manager over OMP
+# This library is used for communication with GVM over GMP
 # You can start, stop, pause and resume scan. Watch progress and status of 
 # scan, download report, etc.
 #
@@ -19,20 +21,20 @@
 #
 # == Usage:
 # 
-#  require 'openvas-omp'
+#  require 'gvm-gmp'
 #
-#  ov=OpenVASOMP::OpenVASOMP.new("user"=>'openvas',"password"=>'openvas')
-#  config=ov.config_get().index("Full and fast")
-#  target=ov.target_create({"name"=>"t", "hosts"=>"127.0.0.1", "comment"=>"t"})
-#  taskid=ov.task_create({"name"=>"t","comment"=>"t", "target"=>target, "config"=>config})
-#  ov.task_start(taskid)
-#  while not ov.task_finished(taskid) do
-#         stat=ov.task_get_byid(taskid)
+#  gvm=GVMGMP::GVMGMP.new("user"=>'admin',"password"=>'admin', 'path' => path)
+#  config=gvm.config_get().index("Full and fast")
+#  target=gvm.target_create({"name"=>"t", "hosts"=>"127.0.0.1", "comment"=>"t"})
+#  taskid=gvm.task_create({"name"=>"t","comment"=>"t", "target"=>target, "config"=>config})
+#  gvm.task_start(taskid)
+#  while not gvm.task_finished(taskid) do
+#         stat=gvm.task_get_byid(taskid)
 #         puts "Status: #{stat['status']}, Progress: #{stat['progress']} %"
 #         sleep 10
 #  end
-#  stat=ov.task_get_byid(taskid)
-#  content=ov.report_get_byid(stat["lastreport"],'HTML')
+#  stat=gvm.task_get_byid(taskid)
+#  content=gvm.report_get_byid(stat["lastreport"],'HTML')
 #  File.open('report.html', 'w') {|f| f.write(content) }
 
 require 'socket' 
@@ -42,74 +44,69 @@ require 'rexml/document'
 require 'rexml/text'
 require 'base64'
 
-# OpenVASOMP module
+# GVMGMP module
 # 
 # Usage:
 # 
-#  require 'openvas-omp'
+#  require 'gvm-gmp'
 # 
-#  ov=OpenVASOMP::OpenVASOMP.new("user"=>'openvas',"password"=>'openvas')
+#  gvm=GVMGMP::GVMGMP.new("user"=>'admin',"password"=>'admin')
 
-module OpenVASOMP
+module GVMGMP
 
-	class OMPError < :: RuntimeError
+	class GMPError < :: RuntimeError
 		attr_accessor :req, :reason
 		def initialize(req, reason = '')
 			self.req = req
 			self.reason = reason
 		end
 		def to_s
-			"OpenVAS OMP: #{self.reason}"
+			"GVM GMP: #{self.reason}"
 		end
 	end
 
-	class OMPResponseError < OMPError
+	class GMPResponseError < GMPError
 		def initialize
-			self.reason = "Error in OMP request/response"
+			self.reason = "Error in GMP request/response"
 		end
 	end
 
-	class OMPAuthError < OMPError
+	class GMPAuthError < GMPError
 		def initialize
 			self.reason = "Authentication failed"
 		end
 	end
 
-	class XMLParsingError < OMPError
+	class XMLParsingError < GMPError
 		def initialize
 			self.reason = "XML parsing failed"
 		end
 	end
 
-	# Core class for OMP communication protocol 
-	class OpenVASOMP
-		# initialize object: try to connect to OpenVAS using URL, user and password
+	# Core class for GMP communication protocol 
+	class GVMGMP
+		# initialize object: try to connect to GVM using Unix socket, user and password
 		#
 		# Usage:
 		#
-		#  ov=OpenVASOMP.new(user=>'user',password=>'pass') 
-		#  # default: host=>'localhost', port=>'9390'
+		#  gvm=GVMGMP.new(user=>'user',password=>'pass') 
+		#  # default: path=>'/run/gvmd/gvmd.sock'
 		# 
 		def initialize(p={})
-			if p.has_key?("host")
-				@host=p["host"]
+			if p.has_key?("path")
+				@path=p["path"]
 			else
-				@host="localhost"
-			end
-			if p.has_key?("port")
-				@port=p["port"]
-			else
-				@port=9390
+				@path="/run/gvmd/gvmd.sock"
 			end
 			if p.has_key?("user")
 				@user=p["user"]
 			else
-				@user="openvas"
+				@user="admin"
 			end
 			if p.has_key?("password")
 				@password=p["password"]
 			else
-				@password="openvas"
+				@password="admin"
 			end
 			if p.has_key?("bufsize")
 				@bufsize=p["bufsize"]
@@ -123,8 +120,7 @@ module OpenVASOMP
 			end
 				
 			if @debug>3 
-				puts "Host: "+@host
-				puts "Port: "+@port.to_s()
+				puts "Socket: "+@path
 				puts "User: "+@user
 			end
 			if @debug>99
@@ -144,45 +140,29 @@ module OpenVASOMP
 		# 
 		# Usage:
 		#
-		# ov.debug(3)
+		# gvm.debug(3)
 		#
 		def debug (level)
 			@debug=level
 		end
 
-		# Low level method - Connect to SSL socket
+		# Low level method - Connect to Unix socket
 		#
 		# Usage:
 		#
-		# ov.connect()
+		# gvm.connect()
 		# 
 		def connect
-			@plain_socket=TCPSocket.open(@host, @port)
-			ssl_context = OpenSSL::SSL::SSLContext.new()
-			@socket = OpenSSL::SSL::SSLSocket.new(@plain_socket, ssl_context)
-			@socket.sync_close = true
-			@socket.connect
+            @socket = UNIXSocket.new(@path)
 		end
 
-		# Low level method - Disconnect SSL socket
-		#
-		# Usage:
-		#
-		# ov.disconnect()
-		# 
-		def disconnect
-			if @socket
-				@socket.close
-			end
-		end
 
 		# Low level method: Send request and receive response - socket
 		#
 		# Usage:
 		#
-		# ov.connect();
-		# puts ov.sendrecv("<get_version/>")
-		# ov.disconnect();
+		# gvm.connect();
+		# puts gvm.sendrecv("<get_version/>")
 		# 
 		def sendrecv (tosend)
 			if not @socket
@@ -198,16 +178,16 @@ module OpenVASOMP
 			size=0
 			begin	
 				begin
-				timeout(@read_timeout) {
+				Timeout.timeout(@read_timeout) {
 				    a = @socket.sysread(@bufsize)
 				    size=a.length
-				    # puts "sysread #{size} bytes"
+				    puts "sysread #{size} bytes"
 				    @rbuf << a
 				}
 				rescue Timeout::Error
 					size=0
 				rescue EOFError
-					raise OMPResponseError
+					raise GMPResponseError
 				end
 			end while size>=@bufsize
 			response=@rbuf
@@ -218,11 +198,11 @@ module OpenVASOMP
 			return response
 		end
 
-		# get OMP version (you don't need to be authenticated)
+		# get GMP version (you don't need to be authenticated)
 		#
 		# Usage:
 		#
-		# ov.version_get()
+		# gvm.version_get()
 		# 
 		def version_get 
 			vreq="<get_version/>"	
@@ -243,7 +223,7 @@ module OpenVASOMP
 		#
 		# Usage:
 		#
-		# ov.xml_attr()
+		# gvm.xml_attr()
 		# 
 		def xml_attr(name, opts={})
 			xml = REXML::Element.new(name)
@@ -258,7 +238,7 @@ module OpenVASOMP
 		#
 		# Usage:
 		#
-		# ov.xml_ele()
+		# gvm.xml_ele()
 		# 
 		def xml_ele(name, child={})
 			xml = REXML::Element.new(name)
@@ -275,7 +255,7 @@ module OpenVASOMP
 		#
 		# Usage:
 		#
-		# ov.xml_mix()
+		# gvm.xml_mix()
 		# 
 		def xml_mix(name, child, attr, elem)
 			xml = REXML::Element.new(name)
@@ -290,18 +270,18 @@ module OpenVASOMP
 			return xml
 		end
 
-		# login to OpenVAS server. 
+		# login to GVM server. 
 		# if successful returns authentication XML for further usage
 		# if unsuccessful returns empty string
 		#
 		# Usage:
 		#
-		# ov.login()
+		# gvm.login()
 		# 
 		def login 
 			areq="<authenticate>"+xml_ele("credentials", {"username"=>@user, "password"=>@password}).to_s()+"</authenticate>"
 			resp=sendrecv(areq+"<HELP/>")
-			# wrap it inside tags, so rexml does not complain
+			# wrap it inside tags, so rexml does not cgmplain
 			resp = "<X>"+resp+"</X>"
 
 			begin
@@ -313,7 +293,7 @@ module OpenVASOMP
 			if status == 200
 				@areq=areq
 			else
-				raise OMPAuthError	
+				raise GMPAuthError	
 			end
 		end
 
@@ -323,7 +303,7 @@ module OpenVASOMP
 		#
 		# Usage:
 		#
-		# if ov.logged_in() then
+		# if gvm.logged_in() then
 		# 	puts "logged in"
 		# end
 		#
@@ -335,40 +315,26 @@ module OpenVASOMP
 			end
 		end
 
-		# logout from OpenVAS server. 
-		# it actually just sets internal authentication XML to empty str
-		# (as in OMP you have to send username/password each time)
-		# (i.e. there is no session id)
-		#
-		# Usage:
-		#
-		# ov.logout()
-		# 
-		def logout
-			disconnect()
-			@areq = ''
-		end
-
-		# OMP low level method - Send string request wrapped with 
+		# GMP low level method - Send string request wrapped with 
 		# authentication XML and return response as string
 		#
 		# Usage:
 		#
-		# ov.request_xml("<HELP/")
+		# gvm.request_xml("<HELP/")
 		# 
-		def omp_request_raw (request) 
+		def gmp_request_raw (request) 
 			resp=sendrecv(@areq+request)
 			return resp
 		end
 
-		# OMP low level method - Send string request wrapped with 
+		# GMP low level method - Send string request wrapped with 
 		# authentication XML and return REXML parsed object
 		#
 		# Usage:
 		#
-		# rexmlobject = ov.request_xml("<HELP/")
+		# rexmlobject = gvm.request_xml("<HELP/")
 		# 
-		def omp_request_xml (request) 
+		def gmp_request_xml (request) 
 			resp=sendrecv(@areq+request)
 			resp = "<X>"+resp+"</X>"
 
@@ -376,7 +342,7 @@ module OpenVASOMP
 				docxml = REXML::Document.new(resp)
 				status=docxml.root.elements['authenticate_response'].attributes['status'].to_i
 				if status<200 and status>299
-					raise OMPAuthError
+					raise GMPAuthError
 				end
 				return docxml.root
 			rescue
@@ -384,42 +350,42 @@ module OpenVASOMP
 			end
 		end
 
-		# OMP - Create target for scanning
+		# GMP - Create target for scanning
 		#
 		# Usage:
 		#
-		# target_id = ov.target_create("name"=>"localhost",
+		# target_id = gvm.target_create("name"=>"localhost",
 		# 	"hosts"=>"127.0.0.1","comment"=>"yes")
 		# 
 		def target_create (p={})
 			xmlreq=xml_ele("create_target", p).to_s()
 
 			begin
-				xr=omp_request_xml(xmlreq)
+				xr=gmp_request_xml(xmlreq)
 				id=xr.elements['create_target_response'].attributes['id']
 			rescue 
-				raise OMPResponseError
+				raise GMPResponseError
 			end
 			return id
 		end
 
-		# OMP - Delete target 
+		# GMP - Delete target 
 		#
 		# Usage:
 		#
-		# ov.target_delete(target_id)
+		# gvm.target_delete(target_id)
 		# 
 		def target_delete (id) 
 			xmlreq=xml_attr("delete_target",{"target_id" => id}).to_s()
 			begin
-				xr=omp_request_xml(xmlreq)
+				xr=gmp_request_xml(xmlreq)
 			rescue 
-				raise OMPResponseError
+				raise GMPResponseError
 			end
 			return xr
 		end
 
-		# OMP - Get target for scanning and returns rexml object
+		# GMP - Get target for scanning and returns rexml object
 		#
 		# Usage:
 		# rexmlobject = target_get_raw("target_id"=>target_id)		
@@ -428,14 +394,14 @@ module OpenVASOMP
 			xmlreq=xml_attr("get_targets", p).to_s()
 
 			begin
-				xr=omp_request_xml(xmlreq)
+				xr=gmp_request_xml(xmlreq)
 				return xr
 			rescue 
-				raise OMPResponseError
+				raise GMPResponseError
 			end
 		end
 
-		# OMP - Get all targets for scanning and returns array of hashes
+		# GMP - Get all targets for scanning and returns array of hashes
 		# with following keys: id,name,comment,hosts,max_hosts,in_use
 		#
 		# Usage:
@@ -457,7 +423,7 @@ module OpenVASOMP
 				end
 				return list
 			rescue 
-				raise OMPResponseError
+				raise GMPResponseError
 			end
 		end
 
@@ -476,38 +442,38 @@ module OpenVASOMP
 			end
 			return list
 			rescue 
-				raise OMPResponseError
+				raise GMPResponseError
 			end
 		end
 
-		# OMP - get reports and returns raw rexml object as response
+		# GMP - get reports and returns raw rexml object as response
 		#
 		# Usage:
 		#
-		# rexmlobject=ov.report_get_raw("format"=>"PDF")
+		# rexmlobject=gvm.report_get_raw("format"=>"PDF")
 		# 
-		# rexmlobject=ov.report_get_raw(
+		# rexmlobject=gvm.report_get_raw(
 		#	"report_id" => "",
 		#	"format"=>"PDF")
 		# 
 		def report_get_raw (p={})
 			xmlreq=xml_attr("get_reports",p).to_s()
 			begin
-				xr=omp_request_xml(xmlreq)
+				xr=gmp_request_xml(xmlreq)
 			rescue 
-				raise OMPResponseError
+				raise GMPResponseError
 			end
 			return xr
 		end	
 
-		# OMP - get report by id and format, returns report
+		# GMP - get report by id and format, returns report
 		# (already base64 decoded if needed)
 		#
 		# format can be: HTML, NBE, PDF, ...	
 		#
 		# Usage:
 		#
-		# pdf_content=ov.report_get_byid(id,"PDF")
+		# pdf_content=gvm.report_get_byid(id,"PDF")
 		# File.open('report.pdf', 'w') {|f| f.write(pdf_content) }
 		# 
 		def report_get_byid (id,format)
@@ -520,11 +486,11 @@ module OpenVASOMP
 			return resp
 		end
 
-		# OMP - get report all, returns report
+		# GMP - get report all, returns report
 		#
 		# Usage:
 		#
-		# pdf_content=ov.report_get_all()
+		# pdf_content=gvm.report_get_all()
 		# 
 		def report_get_all ()
 		begin
@@ -542,49 +508,49 @@ module OpenVASOMP
 			end
 			return list
 		rescue 
-			raise OMPResponseError
+			raise GMPResponseError
 		end
 		end
 
-		# OMP - get reports and returns raw rexml object as response
+		# GMP - get reports and returns raw rexml object as response
 		#
 		# Usage:
 		#
-		# rexmlobject=ov.result_get_raw("notes"=>0)
+		# rexmlobject=gvm.result_get_raw("notes"=>0)
 		# 
 		def result_get_raw (p={})
 		begin
 			xmlreq=xml_attr("get_results",p).to_s()
-			xr=omp_request_xml(xmlreq)
+			xr=gmp_request_xml(xmlreq)
 		rescue 
-			raise OMPResponseError
+			raise GMPResponseError
 		end
 		return xr
 		end	
 
-		# OMP - get configs and returns rexml object as response
+		# GMP - get configs and returns rexml object as response
 		#
 		# Usage:
 		#
-		# rexmldocument=ov.config_get_raw()
+		# rexmldocument=gvm.config_get_raw()
 		#
 		def config_get_raw (p={})
 			xmlreq=xml_attr("get_configs",p).to_s()
 			begin
-				xr=omp_request_xml(xmlreq)
+				xr=gmp_request_xml(xmlreq)
 				return xr	
 			rescue 
-				raise OMPResponseError
+				raise GMPResponseError
 			end
 			return false
 		end	
 
-		# OMP - get configs and returns hash as response
+		# GMP - get configs and returns hash as response
 		# hash[config_id]=config_name
 		#
 		# Usage:
 		#
-		# array_of_hashes=ov.config_get_all()
+		# array_of_hashes=gvm.config_get_all()
 		# 
 		def config_get_all (p={})
 			begin
@@ -599,19 +565,19 @@ module OpenVASOMP
 				end
 				return tc
 			rescue 
-				raise OMPResponseError
+				raise GMPResponseError
 			end
 			return false
 		end	
 
-		# OMP - get configs and returns hash as response
+		# GMP - get configs and returns hash as response
 		# hash[config_id]=config_name
 		#
 		# Usage:
 		#
-		# all_configs_hash=ov.config.get()
+		# all_configs_hash=gvm.config.get()
 		# 
-		# config_id=ov.config_get().index("Full and fast")
+		# config_id=gvm.config_get().index("Full and fast")
 		# 
 		def config_get (p={})
 			begin
@@ -624,12 +590,12 @@ module OpenVASOMP
 				end
 				return list	
 			rescue 
-				raise OMPResponseError
+				raise GMPResponseError
 			end
 			return false
 		end	
 
-		# OMP - copy config with new name and returns new id
+		# GMP - copy config with new name and returns new id
 		#
 		# Usage:
 		#
@@ -639,17 +605,17 @@ module OpenVASOMP
 			xmlreq=xml_attr("create_config",
 			{"copy"=>config_id,"name"=>name}).to_s()
 			begin
-				xr=omp_request_xml(xmlreq)
+				xr=gmp_request_xml(xmlreq)
 				id=xr.elements['create_config_response'].attributes['id']
 				return id	
 			rescue 
-				raise OMPResponseError
+				raise GMPResponseError
 			end
 		end
 
-		# OMP - create config with specified RC file and returns new id
+		# GMP - create config with specified RC file and returns new id
 		# name = name of new config
-		# rcfile = base64 encoded OpenVAS rcfile
+		# rcfile = base64 encoded GVM rcfile
 		#
 		# Usage:
 		#
@@ -659,15 +625,15 @@ module OpenVASOMP
 			xmlreq=xml_attr("create_config",
 			{"name"=>name,"rcfile"=>rcfile}).to_s()
 			begin
-				xr=omp_request_xml(xmlreq)
+				xr=gmp_request_xml(xmlreq)
 				id=xr.elements['create_config_response'].attributes['id']
 				return id	
 			rescue 
-				raise OMPResponseError
+				raise GMPResponseError
 			end
 		end
 
-		# OMP - creates task and returns id of created task
+		# GMP - creates task and returns id of created task
 		#
 		# Parameters which usually fit in p hash and i hash:
 		# p = name,comment,rcfile
@@ -675,20 +641,20 @@ module OpenVASOMP
 		#
 		# Usage:
 		#
-		# task_id=ov.task_create_raw()
+		# task_id=gvm.task_create_raw()
 		# 
 		def task_create_raw (p={}, i={}) 
 			xmlreq=xml_mix("create_task",p,"id",i).to_s()
 			begin
-				xr=omp_request_xml(xmlreq)
+				xr=gmp_request_xml(xmlreq)
 				id=xr.elements['create_task_response'].attributes['id']
 				return id
 			rescue 
-				raise OMPResponseError
+				raise GMPResponseError
 			end
 		end
 
-		# OMP - creates task and returns id of created task	
+		# GMP - creates task and returns id of created task	
 		# 
 		# parameters = name,comment,rcfile,config,target,escalator,
 		#		schedule
@@ -698,7 +664,7 @@ module OpenVASOMP
 		# config_id=o.config_get().index("Full and fast")
 		# target_id=o.target_create(
 		# {"name"=>"localtarget", "hosts"=>"127.0.0.1", "comment"=>"t"})
-		# task_id=ov.task_create(
+		# task_id=gvm.task_create(
 		# {"name"=>"testlocal","comment"=>"test", "target"=>target_id, 
 		# "config"=>config_id}
 		# 
@@ -714,45 +680,45 @@ module OpenVASOMP
 			return task_create_raw(p,ids)
 		end
 
-		# OMP - deletes task specified by task_id
+		# GMP - deletes task specified by task_id
 		# 
 		# Usage:
 		#
-		# ov.task_delete(task_id)
+		# gvm.task_delete(task_id)
 		# 
 		def task_delete (task_id) 
 			xmlreq=xml_attr("delete_task",{"task_id" => task_id}).to_s()
 			begin
-				xr=omp_request_xml(xmlreq)
+				xr=gmp_request_xml(xmlreq)
 			rescue 
-				raise OMPResponseError
+				raise GMPResponseError
 			end
 			return xr
 		end
 
-		# OMP - get task and returns raw rexml object as response
+		# GMP - get task and returns raw rexml object as response
 		#
 		# Usage:
 		#
-		# rexmlobject=ov.task_get_raw("details"=>"0")
+		# rexmlobject=gvm.task_get_raw("details"=>"0")
 		# 
 		def task_get_raw (p={}) 
 			xmlreq=xml_attr("get_tasks",p).to_s()
 			begin
-				xr=omp_request_xml(xmlreq)
+				xr=gmp_request_xml(xmlreq)
 				return xr
 			rescue 
-				raise OMPResponseError
+				raise GMPResponseError
 			end
 		end
 
-		# OMP - get all tasks and returns array with hashes with 
+		# GMP - get all tasks and returns array with hashes with 
 		# following content:
 		# id,name,comment,status,progress,first_report,last_report
 		#
 		# Usage:
 		#
-		# array_of_hashes=ov.task_get_all()
+		# array_of_hashes=gvm.task_get_all()
 		# 
 		def task_get_all (p={}) 
 			xr=task_get_raw(p)
@@ -779,13 +745,13 @@ module OpenVASOMP
 			return t
 		end
 
-		# OMP - get task specified by task_id and returns hash with 
+		# GMP - get task specified by task_id and returns hash with 
 		# following content:
 		# id,name,comment,status,progress,first_report,last_report
 		#
 		# Usage:
 		#
-		# hash=ov.task_get_byid(task_id)
+		# hash=gvm.task_get_byid(task_id)
 		# 
 		def task_get_byid (id) 
 			xr=task_get_raw("task_id"=>id,"details"=>0)
@@ -810,12 +776,12 @@ module OpenVASOMP
 			end
 		end
 
-		# OMP - check if task specified by task_id is finished 
-		# (it checks if task status is "Done" in OMP)
+		# GMP - check if task specified by task_id is finished 
+		# (it checks if task status is "Done" in GMP)
 		# 
 		# Usage:
 		#
-		# if ov.task_finished(task_id)
+		# if gvm.task_finished(task_id)
 		#	puts "Task finished"
 		# end
 		# 
@@ -830,13 +796,13 @@ module OpenVASOMP
 			end
 		end
 
-		# OMP - check progress of task specified by task_id 
-		# (OMP returns -1 if task is finished, not started, etc)
+		# GMP - check progress of task specified by task_id 
+		# (GMP returns -1 if task is finished, not started, etc)
 		# 
 		# Usage:
 		#
 		# print "Progress: "
-		# puts ov.task_progress(task_id)
+		# puts gvm.task_progress(task_id)
 		# 
 		def task_progress (id) 
 			xr=task_get_raw("task_id"=>id,"details"=>0)
@@ -845,66 +811,66 @@ module OpenVASOMP
 			end
 		end
 
-		# OMP - starts task specified by task_id 
+		# GMP - starts task specified by task_id 
 		# 
 		# Usage:
 		#
-		# ov.task_start(task_id)
+		# gvm.task_start(task_id)
 		# 
 		def task_start (task_id) 
 			xmlreq=xml_attr("start_task",{"task_id" => task_id}).to_s()
 			begin
-				xr=omp_request_xml(xmlreq)
+				xr=gmp_request_xml(xmlreq)
 			rescue 
-				raise OMPResponseError
+				raise GMPResponseError
 			end
 			return xr
 		end
 
-		# OMP - stops task specified by task_id 
+		# GMP - stops task specified by task_id 
 		# 
 		# Usage:
 		#
-		# ov.task_stop(task_id)
+		# gvm.task_stop(task_id)
 		# 
 		def task_stop (task_id) 
 			xmlreq=xml_attr("stop_task",{"task_id" => task_id}).to_s()
 			begin
-				xr=omp_request_xml(xmlreq)
+				xr=gmp_request_xml(xmlreq)
 			rescue 
-				raise OMPResponseError
+				raise GMPResponseError
 			end
 			return xr
 		end
 
-		# OMP - pauses task specified by task_id 
+		# GMP - pauses task specified by task_id 
 		# 
 		# Usage:
 		#
-		# ov.task_pause(task_id)
+		# gvm.task_pause(task_id)
 		# 
 		def task_pause (task_id)
 			xmlreq=xml_attr("pause_task",{"task_id" => task_id}).to_s()
 			begin
-				xr=omp_request_xml(xmlreq)
+				xr=gmp_request_xml(xmlreq)
 			rescue 
-				raise OMPResponseError
+				raise GMPResponseError
 			end
 			return xr
 		end
 
-		# OMP - resumes (or starts) task specified by task_id 
+		# GMP - resumes (or starts) task specified by task_id 
 		# 
 		# Usage:
 		#
-		# ov.task_resume_or_start(task_id)
+		# gvm.task_resume_or_start(task_id)
 		# 
 		def task_resume_or_start (task_id)
 			xmlreq=xml_attr("resume_or_start_task",{"task_id" => task_id}).to_s()
 			begin
-				xr=omp_request_xml(xmlreq)
+				xr=gmp_request_xml(xmlreq)
 			rescue 
-				raise OMPResponseError
+				raise GMPResponseError
 			end
 			return xr
 		end
