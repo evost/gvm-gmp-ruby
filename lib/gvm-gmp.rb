@@ -181,7 +181,7 @@ module GVMGMP
 				Timeout.timeout(@read_timeout) {
 				    a = @socket.sysread(@bufsize)
 				    size=a.length
-				    puts "sysread #{size} bytes"
+				    # puts "sysread #{size} bytes"
 				    @rbuf << a
 				}
 				rescue Timeout::Error
